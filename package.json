@@ -1,0 +1,30 @@
+{
+  "name": "wiki-rag-obsidian",
+  "version": "1.0.0",
+  "description": "Compartmentalised LLM-Wiki generator (Karpathy pattern) backed by Bedrock + S3",
+  "type": "module",
+  "main": "dist/lambda.js",
+  "scripts": {
+    "build": "tsc",
+    "status": "tsx index.ts status",
+    "ingest": "tsx index.ts ingest",
+    "ingest:all": "tsx index.ts ingest --all",
+    "query": "tsx index.ts query",
+    "lint": "tsx index.ts lint",
+    "clean": "tsx index.ts clean"
+  },
+  "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "^0.27.0",
+    "@anthropic-ai/sdk": "^0.82.0",
+    "@aws-sdk/client-s3": "^3.600.0",
+    "commander": "^12.1.0",
+    "pdf-parse": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^22.0.0",
+    "@types/pdf-parse": "^1.1.4",
+    "tsx": "^4.21.0",
+    "typescript": "^5.6.0"
+  }
+}

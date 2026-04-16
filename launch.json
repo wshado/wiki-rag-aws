@@ -1,0 +1,70 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Status",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["ts-node", "src/index.ts", "status"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": { "ANTHROPIC_API_KEY": "${env:ANTHROPIC_API_KEY}" }
+    },
+    {
+      "name": "Ingest All",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["ts-node", "src/index.ts", "ingest", "--all"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": { "ANTHROPIC_API_KEY": "${env:ANTHROPIC_API_KEY}" }
+    },
+    {
+      "name": "Ingest Single (edit args)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "ts-node",
+        "src/index.ts",
+        "ingest",
+        "silmarillion_excerpts.txt"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": { "ANTHROPIC_API_KEY": "${env:ANTHROPIC_API_KEY}" }
+    },
+    {
+      "name": "Interactive Query",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["ts-node", "src/index.ts", "query"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": { "ANTHROPIC_API_KEY": "${env:ANTHROPIC_API_KEY}" }
+    },
+    {
+      "name": "Lint Wiki",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["ts-node", "src/index.ts", "lint"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": { "ANTHROPIC_API_KEY": "${env:ANTHROPIC_API_KEY}" }
+    },
+    {
+      "name": "Clean Wiki",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["ts-node", "src/index.ts", "clean"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "env": { "ANTHROPIC_API_KEY": "${env:ANTHROPIC_API_KEY}" }
+    }
+  ]
+}

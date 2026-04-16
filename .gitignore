@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+dist/
+
+# Environment & secrets
+.env
+.env.local
+
+# Logs
+*.log
+
+# Local wiki folder (root level, if any)
+wiki/
+
+# ─────────────────────────────────────────────────────────────────────
+# Compartment content: preserve FOLDER STRUCTURE with .gitkeep,
+# but ignore all actual source documents and compiled wiki pages
+# ─────────────────────────────────────────────────────────────────────
+
+# Raw source documents (PDFs, texts, Office files)
+compartments/**/raw/*.pdf
+compartments/**/raw/*.txt
+compartments/**/raw/*.doc
+compartments/**/raw/*.docx
+compartments/**/raw/*.xls
+compartments/**/raw/*.xlsx
+
+# Compiled wiki pages
+compartments/**/wiki/*.md
+
+# Registry metadata
+compartments/**/wiki/meta/ingested.json
+
+# But preserve folder structure via .gitkeep files
+!.gitkeep
+!compartments/**/.gitkeep

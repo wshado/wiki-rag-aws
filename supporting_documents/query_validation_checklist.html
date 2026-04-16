@@ -1,0 +1,108 @@
+<style>
+  .check-row { display:flex; align-items:flex-start; padding:10px 0; border-bottom:0.5px solid var(--color-border-tertiary); gap:10px; }
+  .check-row:last-child { border-bottom:none; }
+  .check-icon { width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:13px; font-weight:500; margin-top:1px; }
+  .check-ok { background:var(--color-background-success); color:var(--color-text-success); }
+  .check-warn { background:var(--color-background-warning); color:var(--color-text-warning); }
+  .check-step { font-size:11px; color:var(--color-text-secondary); font-weight:500; letter-spacing:0.5px; }
+  .check-title { font-size:14px; font-weight:500; color:var(--color-text-primary); margin:2px 0; }
+  .check-detail { font-size:12px; color:var(--color-text-secondary); line-height:1.6; margin:2px 0 0; }
+  .check-code { font-family:var(--font-mono); font-size:11px; color:var(--color-text-primary); background:var(--color-background-secondary); padding:2px 6px; border-radius:4px; }
+</style>
+
+<div class="check-row">
+  <div class="check-icon check-ok">1</div>
+  <div>
+    <div class="check-step">STEP 1 — WIKI INDEX SEARCH</div>
+    <div class="check-title">store.readIndex() → S3 GetObject</div>
+    <div class="check-detail">
+      <strong style="font-weight:500">Testbed:</strong> <span class="check-code">fs.readFileSync("wiki/index.md")</span><br>
+      <strong style="font-weight:500">Cloud:</strong> <span class="check-code">s3.GetObject({Key: "wiki/index.md"})</span><br>
+      Returns the same string. <span class="check-code">searchWikiIndex()</span> receives identical input. No change needed.
+    </div>
+  </div>
+</div>
+
+<div class="check-row">
+  <div class="check-icon check-ok">2</div>
+  <div>
+    <div class="check-step">STEP 2 — READ WIKI PAGES + EXTRACT POINTERS</div>
+    <div class="check-title">store.readWikiPage(relPath) → S3 GetObject</div>
+    <div class="check-detail">
+      <strong style="font-weight:500">Testbed:</strong> <span class="check-code">fs.readFileSync("wiki/entities/gandalf.md")</span><br>
+      <strong style="font-weight:500">Cloud:</strong> <span class="check-code">s3.GetObject({Key: "wiki/entities/gandalf.md"})</span><br>
+      Returns the same markdown string. <span class="check-code">parseWikiFrontmatter()</span> is pure string parsing — no I/O dependency. Source pointers extracted identically.
+    </div>
+  </div>
+</div>
+
+<div class="check-row">
+  <div class="check-icon check-warn">3</div>
+  <div>
+    <div class="check-step">STEP 3 — TARGETED KB RETRIEVAL</div>
+    <div class="check-title">kb.retrieveTargeted() — s3_key path format must match</div>
+    <div class="check-detail">
+      <strong style="font-weight:500">Testbed:</strong> wiki pointers use <span class="check-code">tolkien/raw/silmarillion.pdf</span><br>
+      <strong style="font-weight:500">Cloud:</strong> wiki pointers must use <span class="check-code">compartments/corp-docs/raw/silmarillion.pdf</span><br>
+      The s3_key in wiki frontmatter must match the actual S3 key that Bedrock KB indexed. If your AD sync lands files at a different prefix than what the testbed used, the ingest pipeline needs to write the correct s3_key into frontmatter. <strong style="font-weight:500">This is the one thing to verify.</strong>
+    </div>
+  </div>
+</div>
+
+<div class="check-row">
+  <div class="check-icon check-ok">4</div>
+  <div>
+    <div class="check-step">STEP 4 — FORMAT DUAL CONTEXT BLOCKS</div>
+    <div class="check-title">budgetContext() — pure computation, no I/O</div>
+    <div class="check-detail">
+      Takes wiki page strings + RAG chunk objects, returns trimmed context blocks. 60/40 budget split. No dependency on where data came from. Identical behavior.
+    </div>
+  </div>
+</div>
+
+<div class="check-row">
+  <div class="check-icon check-ok">5</div>
+  <div>
+    <div class="check-step">STEP 5 — BEDROCK CALL WITH DUAL INPUT</div>
+    <div class="check-title">client.hybridQuery() → InvokeModelCommand</div>
+    <div class="check-detail">
+      <strong style="font-weight:500">Testbed:</strong> <span class="check-code">fetch("https://api.anthropic.com/v1/messages", {system, messages})</span><br>
+      <strong style="font-weight:500">Cloud:</strong> <span class="check-code">bedrock.send(new InvokeModelCommand({body: {system, messages}}))</span><br>
+      Same prompt structure. Same system prompt. Same message format. Both wiki context AND RAG context are in the user message — this is your dual-input pattern. Bedrock's Anthropic-compatible endpoint accepts the identical payload.
+    </div>
+  </div>
+</div>
+
+<div class="check-row">
+  <div class="check-icon check-ok">6</div>
+  <div>
+    <div class="check-step">STEP 6 — STRUCTURED RESULT</div>
+    <div class="check-title">Return { answer, method, wikiPagesUsed, sourcesConsulted }</div>
+    <div class="check-detail">
+      Response parsing is identical — both Anthropic API and Bedrock return <span class="check-code">content[0].text</span>. The structured result object is assembled from local variables. No change needed.
+    </div>
+  </div>
+</div>
+
+<div class="check-row">
+  <div class="check-icon check-ok">+</div>
+  <div>
+    <div class="check-step">STALENESS DETECTION</div>
+    <div class="check-title">detectStaleness() — pure comparison, no I/O</div>
+    <div class="check-detail">
+      Compares wiki pointer hashes against RAG chunk source hashes. Both are already in memory by step 3. No dependency on storage backend.
+    </div>
+  </div>
+</div>
+
+<div class="check-row">
+  <div class="check-icon check-ok">+</div>
+  <div>
+    <div class="check-step">MULTI-TURN CONVERSATION</div>
+    <div class="check-title">ConversationMessage[] — caller-managed, passes through</div>
+    <div class="check-detail">
+      History array is passed in by the caller and appended to the Bedrock messages array. No storage dependency. Works identically whether called from CLI or Lambda.
+    </div>
+  </div>
+</div>
+

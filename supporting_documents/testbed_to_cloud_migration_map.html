@@ -1,0 +1,107 @@
+<style>
+  .mod { display:flex; gap:12px; margin:10px 0; align-items:stretch; }
+  .mod-box { flex:1; border-radius:var(--border-radius-md); padding:10px 14px; font-size:13px; }
+  .mod-from { background:var(--color-background-secondary); border:0.5px solid var(--color-border-tertiary); }
+  .mod-to { border:0.5px solid var(--color-border-info); background:var(--color-background-info); }
+  .mod-label { font-size:11px; font-weight:500; letter-spacing:0.5px; margin-bottom:4px; }
+  .lb-gray { color:var(--color-text-secondary); }
+  .lb-blue { color:var(--color-text-info); }
+  .mod-title { font-weight:500; font-size:14px; margin:2px 0; color:var(--color-text-primary); }
+  .mod-detail { color:var(--color-text-secondary); font-size:12px; margin:2px 0; line-height:1.5; }
+  .arrow-col { display:flex; align-items:center; justify-content:center; flex-shrink:0; width:28px; color:var(--color-text-secondary); font-size:16px; }
+  .section-label { font-size:12px; font-weight:500; color:var(--color-text-secondary); letter-spacing:0.5px; margin:16px 0 4px; padding-bottom:4px; border-bottom:0.5px solid var(--color-border-tertiary); }
+</style>
+
+<p style="font-size:14px;font-weight:500;margin:0 0 4px">Migration map: testbed (API) to cloud (Bedrock + S3 wiki)</p>
+<p style="font-size:13px;color:var(--color-text-secondary);margin:0 0 12px">Your module structure stays the same. The backing services change.</p>
+
+<div class="section-label">LLM inference</div>
+<div class="mod">
+  <div class="mod-box mod-from">
+    <div class="mod-label lb-gray">TESTBED (current)</div>
+    <div class="mod-title">client.ts → Anthropic API</div>
+    <div class="mod-detail">Direct API key auth<br>fetch("https://api.anthropic.com/v1/messages")<br>Data leaves your network</div>
+  </div>
+  <div class="arrow-col">→</div>
+  <div class="mod-box mod-to">
+    <div class="mod-label lb-blue">CLOUD (target)</div>
+    <div class="mod-title">client.ts → Bedrock InvokeModel</div>
+    <div class="mod-detail">IAM role auth via VPC endpoint<br>@aws-sdk/client-bedrock-runtime<br>Data stays in your VPC</div>
+  </div>
+</div>
+
+<div class="section-label">Wiki storage</div>
+<div class="mod">
+  <div class="mod-box mod-from">
+    <div class="mod-label lb-gray">TESTBED (current)</div>
+    <div class="mod-title">store.ts → local filesystem</div>
+    <div class="mod-detail">Reads/writes wiki/*.md from disk<br>index.md, log.md, entities/, concepts/<br>Works for single-user testing</div>
+  </div>
+  <div class="arrow-col">→</div>
+  <div class="mod-box mod-to">
+    <div class="mod-label lb-blue">CLOUD (target)</div>
+    <div class="mod-title">store.ts → S3 wiki bucket</div>
+    <div class="mod-detail">@aws-sdk/client-s3 GetObject/PutObject<br>Same path structure: wiki/{entities,concepts}/<br>Multi-user, versioned, event-driven</div>
+  </div>
+</div>
+
+<div class="section-label">RAG retrieval</div>
+<div class="mod">
+  <div class="mod-box mod-from">
+    <div class="mod-label lb-gray">TESTBED (current)</div>
+    <div class="mod-title">kb.ts → Bedrock KB RetrieveCommand</div>
+    <div class="mod-detail">Already using @aws-sdk/client-bedrock-agent-runtime<br>Broad + targeted retrieval implemented<br>Filter by s3_key from wiki pointers</div>
+  </div>
+  <div class="arrow-col">→</div>
+  <div class="mod-box mod-to">
+    <div class="mod-label lb-blue">CLOUD (target)</div>
+    <div class="mod-title">kb.ts → same, via VPC endpoint</div>
+    <div class="mod-detail">Identical code, different network path<br>Goes through bedrock-agent VPC endpoint<br>Add bedrock-agent-runtime VPC endpoint</div>
+  </div>
+</div>
+
+<div class="section-label">Wiki ingest trigger</div>
+<div class="mod">
+  <div class="mod-box mod-from">
+    <div class="mod-label lb-gray">TESTBED (current)</div>
+    <div class="mod-title">CLI: npx tsx index.ts ingest</div>
+    <div class="mod-detail">Manual ingest per file<br>Reads raw doc, calls Claude, writes wiki pages<br>Triggers KB sync manually</div>
+  </div>
+  <div class="arrow-col">→</div>
+  <div class="mod-box mod-to">
+    <div class="mod-label lb-blue">CLOUD (target)</div>
+    <div class="mod-title">EventBridge → Lambda/ECS</div>
+    <div class="mod-detail">S3 PutObject event (from AD sync)<br>Triggers same ingest logic automatically<br>Writes wiki to S3, triggers KB sync</div>
+  </div>
+</div>
+
+<div class="section-label">Query entry point</div>
+<div class="mod">
+  <div class="mod-box mod-from">
+    <div class="mod-label lb-gray">TESTBED (current)</div>
+    <div class="mod-title">CLI: npx tsx index.ts hybrid-query</div>
+    <div class="mod-detail">Local development + testing<br>Console output</div>
+  </div>
+  <div class="arrow-col">→</div>
+  <div class="mod-box mod-to">
+    <div class="mod-label lb-blue">CLOUD (target)</div>
+    <div class="mod-title">Lambda → NLB → ECS (your existing app)</div>
+    <div class="mod-detail">lambda.ts hybrid_query action<br>Or imported as module in ECS query app<br>Cognito-authenticated users</div>
+  </div>
+</div>
+
+<div class="section-label">Document source</div>
+<div class="mod">
+  <div class="mod-box mod-from">
+    <div class="mod-label lb-gray">TESTBED (current)</div>
+    <div class="mod-title">tolkien/raw/*.pdf (test corpus)</div>
+    <div class="mod-detail">Tolkien books as test data<br>Manual upload to S3 + local</div>
+  </div>
+  <div class="arrow-col">→</div>
+  <div class="mod-box mod-to">
+    <div class="mod-label lb-blue">CLOUD (target)</div>
+    <div class="mod-title">AD drive → DataSync → S3 raw/</div>
+    <div class="mod-detail">Years of org docs from network drive<br>Continuous sync via DataSync or custom job<br>EventBridge catches new objects</div>
+  </div>
+</div>
+
