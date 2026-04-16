@@ -5,6 +5,9 @@ dist/
 # Environment & secrets
 .env
 .env.local
+.gitignore
+.dockerignore
+.gitattributes
 
 # Logs
 *.log
