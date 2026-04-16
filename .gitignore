@@ -6,6 +6,11 @@ dist/
 .env
 .env.local
 
+# Config dot-files
+.gitignore
+.dockerignore
+.gitattributes
+
 # Logs
 *.log
 
