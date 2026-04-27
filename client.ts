@@ -30,6 +30,23 @@ export interface WikiDiff {
   summary: string;
 }
 
+export interface ModelCallUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export interface CallContext {
+  purpose: "ingest" | "query" | "lint";
+  filename?: string;
+  chunkIndex?: number;
+  chunkTotal?: number;
+}
+
+export interface DiffWithUsage {
+  diff: WikiDiff;
+  usage: ModelCallUsage;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Prompts
 // ─────────────────────────────────────────────────────────────────────────────
@@ -180,6 +197,54 @@ Respond ONLY with the JSON object.
 `.trim();
 
 // ─────────────────────────────────────────────────────────────────────────────
+// JSON extraction helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Walks `s` and returns the slice containing the first complete top-level
+// `{...}` object, plus the number of trailing chars after it. Respects string
+// literals so braces inside values don't confuse the depth counter. Throws
+// when no `{` is present or depth never returns to zero (true truncation).
+function extractFirstJsonObject(s: string): { json: string; trailingLen: number } {
+  const start = s.indexOf("{");
+  if (start === -1) throw new Error("no '{' found in model output");
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+  for (let i = start; i < s.length; i++) {
+    const c = s[i];
+    if (escape) {
+      escape = false;
+      continue;
+    }
+    if (c === "\\") {
+      escape = true;
+      continue;
+    }
+    if (c === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) {
+        const json = s.slice(start, i + 1);
+        return { json, trailingLen: s.length - (i + 1) };
+      }
+    }
+  }
+  throw new Error("unterminated JSON object — depth never returned to 0");
+}
+
+// V8 SyntaxError from JSON.parse includes "at position N" in the message.
+function parseJsonErrorPosition(e: unknown): number | null {
+  if (!(e instanceof Error)) return null;
+  const m = /position (\d+)/.exec(e.message);
+  return m ? Number(m[1]) : null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Client
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -209,28 +274,64 @@ export class WikiClient {
   private async call(
     prompt: string,
     model: string,
-    maxTokens = 32000
-  ): Promise<string> {
-    // Streaming mode. Three reasons:
-    //   1. No overall request timeout — the non-streaming SDK path has a
-    //      10-minute cap that big chunks near the 16k-output ceiling can
-    //      actually hit under rate-limit backoff.
-    //   2. Progress feedback — we print a dot per text delta so the
-    //      operator can see the model working instead of staring at a
-    //      silent terminal for 3 minutes per chunk.
-    //   3. Catches max_tokens truncation via finalMessage().stop_reason
-    //      just like the non-streaming path did.
-    process.stdout.write("    ");
+    maxTokens: number,
+    context: CallContext
+  ): Promise<{ text: string; stopReason: string | null; usage: ModelCallUsage }> {
+    // Streaming mode keeps the SDK's 10-minute non-streaming timeout from
+    // biting on long chunks, and lets us emit throttled progress heartbeats
+    // to CloudWatch instead of per-delta dots.
+    const startMs = Date.now();
+    const HEARTBEAT_INTERVAL_MS = 10_000;
+    let lastBeatMs = startMs;
+    let charsSoFar = 0;
+
     const stream = this.client.messages.stream({
       model,
       max_tokens: maxTokens,
       messages: [{ role: "user", content: prompt }],
     });
 
-    stream.on("text", () => process.stdout.write("."));
+    stream.on("text", (delta: string) => {
+      charsSoFar += delta.length;
+      const now = Date.now();
+      if (now - lastBeatMs >= HEARTBEAT_INTERVAL_MS) {
+        lastBeatMs = now;
+        console.log(
+          JSON.stringify({
+            event: "model_streaming",
+            purpose: context.purpose,
+            filename: context.filename,
+            chunk_index: context.chunkIndex,
+            chunk_total: context.chunkTotal,
+            elapsed_s: Math.round((now - startMs) / 1000),
+            chars_so_far: charsSoFar,
+          })
+        );
+      }
+    });
 
     const finalMessage = await stream.finalMessage();
-    process.stdout.write("\n");
+    const durationMs = Date.now() - startMs;
+    const usage: ModelCallUsage = {
+      inputTokens: finalMessage.usage.input_tokens,
+      outputTokens: finalMessage.usage.output_tokens,
+    };
+
+    console.log(
+      JSON.stringify({
+        event: "model_call",
+        purpose: context.purpose,
+        filename: context.filename,
+        chunk_index: context.chunkIndex,
+        chunk_total: context.chunkTotal,
+        model,
+        max_tokens: maxTokens,
+        input_tokens: usage.inputTokens,
+        output_tokens: usage.outputTokens,
+        stop_reason: finalMessage.stop_reason,
+        duration_ms: durationMs,
+      })
+    );
 
     if (finalMessage.stop_reason === "max_tokens") {
       throw new Error(
@@ -238,16 +339,16 @@ export class WikiClient {
           `The response was cut off before completing. ` +
           `Either lower CHUNK_CHARS (currently ${config.chunkChars}) so each ` +
           `chunk produces a smaller diff, or raise the maxTokens argument in ` +
-          `client.ts (Sonnet 4.6 supports up to 64000).`
+          `client.ts (Opus 4.7 supports up to 128000; Sonnet 4.6 up to 64000).`
       );
     }
 
     const block = finalMessage.content[0];
     if (block.type !== "text") throw new Error("Unexpected response type");
-    return block.text;
+    return { text: block.text, stopReason: finalMessage.stop_reason, usage };
   }
 
-  private parseDiff(raw: string): WikiDiff {
+  private parseDiff(raw: string, stopReason: string | null): WikiDiff {
     // Strip markdown fences if the model wraps the JSON
     const cleaned = raw
       .trim()
@@ -255,16 +356,55 @@ export class WikiClient {
       .replace(/\s*```\s*$/m, "")
       .trim();
 
+    // Extract just the first complete JSON object. The model sometimes
+    // emits explanatory prose after the closing brace even when instructed
+    // not to; JSON.parse on the full buffer then fails with "Unexpected
+    // non-whitespace character after JSON at position N". Walking with a
+    // brace-depth counter that respects string literals gives us the first
+    // complete object and reports trailing content separately.
+    let extracted: { json: string; trailingLen: number };
     try {
-      const parsed = JSON.parse(cleaned) as WikiDiff;
+      extracted = extractFirstJsonObject(cleaned);
+    } catch (e) {
+      throw new Error(
+        `${e instanceof Error ? e.message : String(e)}. ` +
+          `stop_reason=${stopReason} length=${raw.length}. ` +
+          `Last 200 chars:\n${raw.slice(-200)}`
+      );
+    }
+
+    if (extracted.trailingLen > 0) {
+      const trailingStart = extracted.json.length;
+      const trailingSnippet = cleaned.slice(trailingStart, trailingStart + 200);
+      console.warn(
+        JSON.stringify({
+          event: "model_trailing_content",
+          stop_reason: stopReason,
+          trailing_chars: extracted.trailingLen,
+          snippet: trailingSnippet,
+        })
+      );
+    }
+
+    try {
+      const parsed = JSON.parse(extracted.json) as WikiDiff;
       return {
         upserts: parsed.upserts ?? {},
         deletions: parsed.deletions ?? [],
         summary: parsed.summary ?? "",
       };
     } catch (e) {
+      const pos = parseJsonErrorPosition(e);
+      const context =
+        pos !== null
+          ? `Around failure (chars ${Math.max(0, pos - 100)}-${pos + 100}):\n` +
+            extracted.json.slice(Math.max(0, pos - 100), pos + 100)
+          : `First 500 chars:\n${extracted.json.slice(0, 500)}\n\nLast 200 chars:\n${extracted.json.slice(-200)}`;
       throw new Error(
-        `Model returned invalid JSON: ${e}\n\nFirst 500 chars:\n${raw.slice(0, 500)}`
+        `Model returned invalid JSON: ${e}\n` +
+          `stop_reason=${stopReason} raw_length=${raw.length} ` +
+          `extracted_length=${extracted.json.length} trailing_len=${extracted.trailingLen}\n` +
+          context
       );
     }
   }
@@ -279,7 +419,7 @@ export class WikiClient {
     date: string;
     chunkIndex?: number;
     chunkTotal?: number;
-  }): Promise<WikiDiff> {
+  }): Promise<DiffWithUsage> {
     const chunkHeader =
       params.chunkTotal && params.chunkTotal > 1
         ? `Chunk: ${(params.chunkIndex ?? 0) + 1} of ${params.chunkTotal}`
@@ -294,34 +434,52 @@ export class WikiClient {
       .replace("{STEM}", params.stem)
       .replace(/{DATE}/g, params.date);
 
-    // 32k tokens of output — Opus 4.6's max. Bumped from 16384 after a
-    // chunk of The Hobbit truncated mid-diff. The model tends to expand
-    // output as the wiki grows (more existing pages to refine), so headroom
-    // matters more on later chunks than the first.
-    const raw = await this.call(prompt, config.wikiModel, 32000);
-    return this.parseDiff(raw);
+    // 64k output budget — Opus 4.7 on Bedrock supports up to 128k; 64k gives
+    // generous headroom without inviting the model to sprawl. Billed on
+    // tokens emitted, not on the budget, so over-budgeting is free.
+    const { text, stopReason, usage } = await this.call(
+      prompt,
+      config.wikiModel,
+      64000,
+      {
+        purpose: "ingest",
+        filename: params.filename,
+        chunkIndex: params.chunkIndex,
+        chunkTotal: params.chunkTotal,
+      }
+    );
+    return { diff: this.parseDiff(text, stopReason), usage };
   }
 
   async query(
     question: string,
     wikiContext: string,
     index: string
-  ): Promise<WikiDiff> {
+  ): Promise<DiffWithUsage> {
     const prompt = QUERY_PROMPT.replace("{INDEX}", index || "(empty index)")
       .replace("{WIKI_CONTEXT}", wikiContext)
       .replace("{QUESTION}", question);
-    const raw = await this.call(prompt, config.queryModel, 4096);
-    return this.parseDiff(raw);
+    const { text, stopReason, usage } = await this.call(
+      prompt,
+      config.queryModel,
+      4096,
+      { purpose: "query" }
+    );
+    return { diff: this.parseDiff(text, stopReason), usage };
   }
 
-  async lint(wikiContext: string, date: string): Promise<WikiDiff> {
+  async lint(wikiContext: string, date: string): Promise<DiffWithUsage> {
     const prompt = LINT_PROMPT.replace("{WIKI_CONTEXT}", wikiContext).replace(
       /{DATE}/g,
       date
     );
-    // Lint can touch many pages at once — give it the same 32k headroom
-    // as ingest.
-    const raw = await this.call(prompt, config.wikiModel, 32000);
-    return this.parseDiff(raw);
+    // Lint can touch many pages at once — same 64k headroom as ingest.
+    const { text, stopReason, usage } = await this.call(
+      prompt,
+      config.wikiModel,
+      64000,
+      { purpose: "lint" }
+    );
+    return { diff: this.parseDiff(text, stopReason), usage };
   }
 }

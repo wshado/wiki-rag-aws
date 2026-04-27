@@ -20,7 +20,15 @@ export interface IngestResult {
   pagesUpserted: string[];
   pagesDeleted: string[];
   summary: string;
+  inputTokens: number;
+  outputTokens: number;
+  chunksProcessed: number;
 }
+
+// Opus 4.7 Bedrock pricing — keep in sync with
+// https://aws.amazon.com/bedrock/pricing/
+const OPUS_INPUT_USD_PER_MTOK = 5;
+const OPUS_OUTPUT_USD_PER_MTOK = 25;
 
 export interface QueryResult {
   question: string;
@@ -123,6 +131,9 @@ export class WikiEngine {
           pagesUpserted: [],
           pagesDeleted: [],
           summary: "",
+          inputTokens: 0,
+          outputTokens: 0,
+          chunksProcessed: 0,
         };
       }
       if (decision.action === "resume") {
@@ -140,6 +151,9 @@ export class WikiEngine {
     const date = new Date().toISOString().slice(0, 10);
     const allDeleted = new Set<string>();
     const chunkSummaries: string[] = [];
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let chunksProcessed = 0;
 
     for (let i = startChunk; i < chunks.length; i++) {
       const chunk = chunks[i];
@@ -148,7 +162,7 @@ export class WikiEngine {
       } else {
         console.log(`  [single pass] calling model...`);
       }
-      const diff = await this.client.ingest({
+      const { diff, usage } = await this.client.ingest({
         filename: source.name,
         stem: source.stem,
         sha256: source.sha256,
@@ -159,6 +173,9 @@ export class WikiEngine {
         chunkIndex: chunk.index,
         chunkTotal: chunk.total,
       });
+      inputTokens += usage.inputTokens;
+      outputTokens += usage.outputTokens;
+      chunksProcessed += 1;
 
       const { upserted, deleted } = await this.applyDiff(diff);
       upserted.forEach((p) => allUpserted.add(p));
@@ -205,15 +222,44 @@ export class WikiEngine {
       pagesUpserted: upsertedList,
       pagesDeleted: Array.from(allDeleted),
       summary: chunkSummaries.join("\n\n"),
+      inputTokens,
+      outputTokens,
+      chunksProcessed,
     };
   }
 
   async ingestAll(force = false): Promise<IngestResult[]> {
+    const startMs = Date.now();
     const files = await this.store.listSourceFiles();
     const results: IngestResult[] = [];
     for (const f of files) {
       results.push(await this.ingest(f, force));
     }
+
+    const totalInput = results.reduce((s, r) => s + r.inputTokens, 0);
+    const totalOutput = results.reduce((s, r) => s + r.outputTokens, 0);
+    const chunksTotal = results.reduce((s, r) => s + r.chunksProcessed, 0);
+    const chunksSkipped = results.filter((r) => r.skipped).length;
+    const chunksSucceeded = results.filter((r) => !r.skipped).length;
+    const estimatedCostUsd =
+      (totalInput / 1_000_000) * OPUS_INPUT_USD_PER_MTOK +
+      (totalOutput / 1_000_000) * OPUS_OUTPUT_USD_PER_MTOK;
+
+    console.log(
+      JSON.stringify({
+        event: "ingest_run_complete",
+        compartment: this.compartment,
+        files: results.map((r) => path.basename(r.filePath)),
+        files_succeeded: chunksSucceeded,
+        files_skipped: chunksSkipped,
+        chunks_total: chunksTotal,
+        total_input_tokens: totalInput,
+        total_output_tokens: totalOutput,
+        estimated_cost_usd: Number(estimatedCostUsd.toFixed(4)),
+        duration_ms: Date.now() - startMs,
+      })
+    );
+
     return results;
   }
 
@@ -221,7 +267,7 @@ export class WikiEngine {
 
   async query(question: string, persistSynthesis = true): Promise<QueryResult> {
     const wikiContext = await this.store.readWikiAsContext(config.maxWikiPages);
-    const diff = await this.client.query(
+    const { diff } = await this.client.query(
       question,
       wikiContext,
       await this.store.readIndex()
@@ -246,7 +292,7 @@ export class WikiEngine {
   async lint(): Promise<LintResult> {
     const wikiContext = await this.store.readWikiAsContext(config.maxWikiPages);
     const date = new Date().toISOString().slice(0, 10);
-    const diff = await this.client.lint(wikiContext, date);
+    const { diff } = await this.client.lint(wikiContext, date);
     const { upserted, deleted } = await this.applyDiff(diff);
     return { pagesUpserted: upserted, pagesDeleted: deleted, report: diff.summary };
   }

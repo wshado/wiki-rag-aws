@@ -79,8 +79,8 @@ export const config: WikiConfig = {
   // ── Bedrock mode (active — AWS deployment) ──────────────────────────
   // Cross-region inference profiles for Claude 4.6 via the us-* profile.
   // Override via env for other regions.
-  wikiModel: env("BEDROCK_WIKI_MODEL", "us.anthropic.claude-opus-4-6-20251101-v1:0")!,
-  queryModel: env("BEDROCK_QUERY_MODEL", "us.anthropic.claude-sonnet-4-6-20251101-v1:0")!,
+  wikiModel: env("BEDROCK_WIKI_MODEL", "us.anthropic.claude-opus-4-7")!,
+  queryModel: env("BEDROCK_QUERY_MODEL", "us.anthropic.claude-sonnet-4-6")!,
 
   // ── API-test mode (disabled) ─────────────────────────────────────────
   // Direct Anthropic API model IDs. Used while testing the pipeline
